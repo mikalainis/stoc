@@ -1,0 +1,17 @@
+
+name: Deploy to Cloud Run Jobs
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+      # ... (Rest of your workflow content) ...
+      # You can paste the full content here if you have it, 
+      # or assumes you created it manually.

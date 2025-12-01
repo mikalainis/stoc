@@ -1,0 +1,6 @@
+google-genai
+slack-sdk
+alpaca-py
+pandas
+nest_asyncio
+google-cloud-storage
