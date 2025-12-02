@@ -469,7 +469,7 @@ class PortfolioAudit:
         self.config = config
         self.alpaca = TradingClient(config.ALPACA_KEY, config.ALPACA_SECRET, paper=config.IS_PAPER)
         self.discovery = DiscoveryAgent(config)
-        self.tracker = TradeTracker(config)
+        self.tracker = SmartTracker(config)
 
     def is_market_open(self) -> bool:
         if self.config.IS_PAPER: return True # Always run paper
