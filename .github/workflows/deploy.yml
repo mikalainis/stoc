@@ -14,7 +14,7 @@ env:
   # *: Every day of month
   # *: Every month
     # 1-5: Monday (1) through Friday (5)
-  CRON_SCHEDULE: "0 10,14 * * 1-5"
+  CRON_SCHEDULE: "30 9,10,11,14,15 * * 1-5"
   REGION: us-east4
 
 jobs:
