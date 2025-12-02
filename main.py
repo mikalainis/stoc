@@ -44,13 +44,13 @@ logger = logging.getLogger("DarwinianSwarm")
 # ==========================================
 USER_SETTINGS = {
     # --- STRATEGY & RISK ---
-    "TRADE_ALLOCATION": 1000.0,   # Target Buy size ($) per trade
+    "TRADE_ALLOCATION": 3000.0,   # Target Buy size ($) per trade
     "MAX_POS_PERCENT": 0.05,      # Max Portfolio % size per single stock (5% Cap)
-    "MIN_CONFIDENCE": 90,         # % AI Confidence required to Buy
-    "RSI_BUY_THRESHOLD": 40,      # Buy if RSI is below this (Dip Buying)
+    "MIN_CONFIDENCE": 85,         # % AI Confidence required to Buy
+    "RSI_BUY_THRESHOLD": 35,      # Buy if RSI is below this (Dip Buying)
     
     # --- DISCOVERY ENGINE ---
-    "TOP_N_STOCKS": 20,           # Number of stocks to hunt for
+    "TOP_N_STOCKS": 40,           # Number of stocks to hunt for
     "ANALYSIS_COOLDOWN_HOURS": 24,# Don't re-scan a rejected stock for X hours
     "EXECUTION_TIMEOUT_SECONDS": 60, # Kill analysis if it hangs > 60s
     
