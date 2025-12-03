@@ -5,3 +5,4 @@ pandas
 nest_asyncio
 google-cloud-storage
 google-cloud-firestore
+requests
