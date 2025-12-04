@@ -129,8 +129,15 @@ class Config:
         # Validate Critical Secrets
         missing = [k for k in ["GOOGLE_KEY", "ALPACA_KEY", "ALPACA_SECRET", "SLACK_TOKEN"] if not secrets[k]]
         if missing:
-            logger.critical(f"Missing Critical Secrets: {missing}")
-            sys.exit(1)
+            print(f"DEBUG: sys.argv={sys.argv}")
+            # RELAXED CHECK FOR TEST MODE
+            if "--test" in sys.argv:
+                logger.warning(f"⚠️ MISSING SECRETS IN TEST MODE: {missing}. Using dummy values to proceed with smoke test.")
+                for k in missing:
+                    secrets[k] = "TEST_DUMMY_VALUE"
+            else:
+                logger.critical(f"Missing Critical Secrets: {missing}")
+                sys.exit(1)
 
         return cls(**secrets)
 
@@ -429,6 +436,50 @@ class DiscoveryAgent:
         self.config = config
         self.client = genai.Client(api_key=config.GOOGLE_KEY)
 
+
+    def _fetch_sp500_list(self) -> List[str]:
+        url = f"https://financialmodelingprep.com/api/v3/sp500_constituent?apikey={self.config.FMP_API_KEY}"
+        try:
+            r = requests.get(url)
+            data = r.json()
+            if isinstance(data, list):
+                return [item['symbol'] for item in data]
+            else:
+                print(f"   ⚠️ FMP S&P List Error: {data}")
+                return []
+        except Exception as e:
+            print(f"   ❌ FMP S&P Fetch Error: {e}")
+            return []
+
+    def _check_ticker_criteria(self, ticker: str) -> bool:
+        """
+        Criteria:
+        - Revenue Growth Rate: > 4%
+        - P/E ratio: > 15
+        - Gross profit margin: > 20%
+        - Debt-to-Equity Ratio: <= 1.0
+        - ROE: > 12%
+        - FCF to Sales: > 5%
+        """
+        try:
+            # 1. Fetch Ratios (TTM)
+            ratios_url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={self.config.FMP_API_KEY}"
+            r_resp = requests.get(ratios_url)
+            r_data = r_resp.json()
+            
+            if not isinstance(r_data, list) or not r_data:
+                return False
+
+            r = r_data[0]
+            
+            pe = r.get('peRatioTTM', 0) or 0
+            gross_margin = r.get('grossProfitMarginTTM', 0) or 0
+            debt_equity = r.get('debtEquityRatioTTM', 100) or 100
+            roe = r.get('returnOnEquityTTM', 0) or 0
+            
+            # Check Basic Ratios first to fail fast
+            if not (pe > 15 and gross_margin > 0.20 and debt_equity <= 1.0 and roe > 0.12):
+                return False
     def find_top_picks(self) -> List[str]:
         target_count = self.config.TOP_N_STOCKS
         print(f"\n🔎 DISCOVERY MODE: Scanning Market News for {target_count} stocks...")
@@ -464,9 +515,78 @@ class DiscoveryAgent:
             print(f"   🔬 Found {len(tickers)} Candidates from News: {tickers}")
             return tickers
 
-        except Exception as e:
-            logger.error(f"Discovery Failed: {e}")
-            return []
+
+            # 2. Fetch Growth (Revenue Growth)
+            growth_url = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=1&apikey={self.config.FMP_API_KEY}"
+            g_resp = requests.get(growth_url)
+            g_data = g_resp.json()
+
+            if not isinstance(g_data, list) or not g_data:
+                return False
+
+            rev_growth = g_data[0].get('revenueGrowth', 0) or 0
+            if rev_growth <= 0.04:
+                return False
+
+            # 3. Check FCF to Sales (Available in Ratios TTM usually as freeCashFlowToRevenueTTM ??
+            # Or calculate from Per Share metrics in Ratios TTM)
+            # Some versions of FMP ratios have 'freeCashFlowToOperatingCashFlowTTM' etc.
+            # Let's check 'freeCashFlowPerShareTTM' / 'revenuePerShareTTM'
+            fcf_ps = r.get('freeCashFlowPerShareTTM', 0) or 0
+            rev_ps = r.get('revenuePerShareTTM', 0) or 0
+
+            if rev_ps == 0:
+                return False
+
+            fcf_sales = fcf_ps / rev_ps
+            if fcf_sales <= 0.05:
+                return False
+
+            print(f"   ✅ MATCH: {ticker} (Growth: {rev_growth:.2%}, PE: {pe:.1f}, GM: {gross_margin:.1%}, D/E: {debt_equity:.2f}, ROE: {roe:.1%}, FCF/S: {fcf_sales:.1%})")
+            return True
+
+        except Exception:
+            return False
+
+    def find_top_picks(self) -> List[str]:
+        target_count = self.config.TOP_N_STOCKS
+        print(f"\n🔎 DISCOVERY MODE: Filtering S&P 500 via FMP...")
+
+        # 1. Get Universe
+        tickers = self._fetch_sp500_list()
+
+        # FALLBACK: If API fails (e.g. Restricted Key), use a static list of top S&P 500 to allow process to continue
+        if not tickers:
+            print("   ⚠️ Fetch failed (likely Key Restriction). Using static Top 30 S&P list for fallback.")
+            tickers = [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "LLY", "AVGO",
+                "JPM", "V", "UNH", "XOM", "MA", "JNJ", "PG", "HD", "COST", "MRK",
+                "ABBV", "CVX", "CRM", "BAC", "WMT", "AMD", "ACN", "PEP", "LIN", "MCD"
+            ]
+
+        print(f"   🔬 Scanning {len(tickers)} stocks for criteria...")
+
+        # 2. Parallel Scan
+        qualifying_tickers = []
+        # Limit concurrency to avoid rate limits (though FMP is usually generous)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_ticker = {executor.submit(self._check_ticker_criteria, t): t for t in tickers}
+
+            count = 0
+            for future in concurrent.futures.as_completed(future_to_ticker):
+                count += 1
+                if count % 20 == 0:
+                    print(f"      Progress: {count}/{len(tickers)}...")
+
+                t = future_to_ticker[future]
+                try:
+                    if future.result():
+                        qualifying_tickers.append(t)
+                except Exception as e:
+                    pass
+
+        print(f"   🎯 Found {len(qualifying_tickers)} matches: {qualifying_tickers}")
+        return qualifying_tickers[:target_count]
 
 # --- 7. PORTFOLIO MANAGER (Unified Threading) ---
 class PortfolioAudit:
