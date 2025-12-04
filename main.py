@@ -64,6 +64,7 @@ USER_SETTINGS = {
     "GCS_BUCKET_NAME": None,       # Auto-loaded from Env Var in Cloud
     "ALPHA_VANTAGE_KEY": "D8HPKBQ0AKCA8FUI",
     "FMP_API_KEY": "waiwr0TJe2NKRuPo5ceRF4xmjtp2k9uv"
+    "ALPHA_VANTAGE_KEY": "D8HPKBQ0AKCA8FUI"
 }
 # ==========================================
 
@@ -482,6 +483,42 @@ class DiscoveryAgent:
             # Check Basic Ratios first to fail fast
             if not (pe > 15 and gross_margin > 0.20 and debt_equity <= 1.0 and roe > 0.12):
                 return False
+
+    def find_top_picks(self) -> List[str]:
+        target_count = self.config.TOP_N_STOCKS
+        print(f"\n🔎 DISCOVERY MODE: Scanning Market News for {target_count} stocks...")
+        
+        try:
+            # Call Alpha Vantage News (no specific ticker = general market news)
+            url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&apikey={self.config.ALPHA_VANTAGE_KEY}&limit=50&topics=financial_markets"
+            r = requests.get(url)
+            data = r.json()
+            
+            if "feed" not in data:
+                print(f"   ⚠️ No News Feed Found: {data}")
+                return []
+
+            found_tickers = []
+            for art in data["feed"]:
+                if "ticker_sentiment" in art:
+                    for t in art["ticker_sentiment"]:
+                        ticker = t.get("ticker", "")
+                        # Simple filter to avoid Crypto/Forex if labeled as such (though AV usually puts them in separate topics)
+                        # We also want to ensure it looks like a stock ticker (up to 5 chars usually)
+                        if ticker and "CRYPTO" not in ticker and "FOREX" not in ticker:
+                            found_tickers.append(ticker)
+            
+            # Count frequency (popular stocks in news)
+            from collections import Counter
+            counts = Counter(found_tickers)
+
+            # Return top N most mentioned
+            most_common = counts.most_common(target_count)
+            tickers = [t[0] for t in most_common]
+            
+            print(f"   🔬 Found {len(tickers)} Candidates from News: {tickers}")
+            return tickers
+
 
             # 2. Fetch Growth (Revenue Growth)
             growth_url = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=1&apikey={self.config.FMP_API_KEY}"
