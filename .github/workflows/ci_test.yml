@@ -2,9 +2,7 @@ name: CI Test Bot
 
 on:
   push:
-    branches: [ "main" ]
   pull_request:
-    branches: [ "main" ]
 
 jobs:
   test-bot:
@@ -36,6 +34,7 @@ jobs:
         SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
         ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
         GCS_BUCKET_NAME: ${{ secrets.GCS_BUCKET_NAME }}
+        FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         IS_PAPER: "True"
       run: |
         python main.py --test
