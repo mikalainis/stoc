@@ -509,7 +509,13 @@ class DiscoveryAgent:
             if fcf_sales <= 0.05:
                 return False
 
-            print(f"   ✅ MATCH: {ticker} (Growth: {rev_growth:.2%}, PE: {pe:.1f}, GM: {gross_margin:.1%}, D/E: {debt_equity:.2f}, ROE: {roe:.1%}, FCF/S: {fcf_sales:.1%})")
+            print(f"   ✅ MATCH: {ticker}\n"
+                  f"      Growth: {rev_growth:.1%} (✅)\n"
+                  f"      PE Ratio: {pe:.1f} (✅)\n"
+                  f"      Gross Margin: {gross_margin:.1%} (✅)\n"
+                  f"      Debt/Equity: {debt_equity:.2f} (✅)\n"
+                  f"      ROE: {roe:.1%} (✅)\n"
+                  f"      FCF/Sales: {fcf_sales:.1%} (✅)")
             return True
 
         except Exception:
