@@ -478,7 +478,7 @@ class DiscoveryAgent:
             gross_margin = r.get('grossProfitMarginTTM', 0) or 0
             debt_equity = r.get('debtEquityRatioTTM', 100) or 100
             roe = r.get('returnOnEquityTTM', 0) or 0
-            
+
             # Check Basic Ratios first to fail fast
             if not (pe > 15 and gross_margin > 0.20 and debt_equity <= 1.0 and roe > 0.12):
                 return False
@@ -501,7 +501,7 @@ class DiscoveryAgent:
             # Let's check 'freeCashFlowPerShareTTM' / 'revenuePerShareTTM'
             fcf_ps = r.get('freeCashFlowPerShareTTM', 0) or 0
             rev_ps = r.get('revenuePerShareTTM', 0) or 0
-
+            
             if rev_ps == 0:
                 return False
 
@@ -509,11 +509,27 @@ class DiscoveryAgent:
             if fcf_sales <= 0.05:
                 return False
 
-            print(f"   ✅ MATCH: {ticker} (Growth: {rev_growth:.2%}, PE: {pe:.1f}, GM: {gross_margin:.1%}, D/E: {debt_equity:.2f}, ROE: {roe:.1%}, FCF/S: {fcf_sales:.1%})")
+            print(f"   ✅ MATCH: {ticker}\n"
+                  f"      Growth: {rev_growth:.1%} (✅)\n"
+                  f"      PE Ratio: {pe:.1f} (✅)\n"
+                  f"      Gross Margin: {gross_margin:.1%} (✅)\n"
+                  f"      Debt/Equity: {debt_equity:.2f} (✅)\n"
+                  f"      ROE: {roe:.1%} (✅)\n"
+                  f"      FCF/Sales: {fcf_sales:.1%} (✅)")
             return True
 
-        except Exception:
-            return False
+        except Exception as e:
+            # If verbose or test mode, print why it failed
+            # For this simple implementation, we will just print basic info if it's the fallback list (usually test mode)
+            # or if we really want to debug.
+            # Let's print a failure summary for visibility in test mode.
+            pass
+
+        # Explicit rejection logging for visibility
+        if "--test" in sys.argv:
+             print(f"   ❌ SKIP: {ticker} (Did not meet criteria or data error)")
+
+        return False
 
     def find_top_picks(self) -> List[str]:
         target_count = self.config.TOP_N_STOCKS
