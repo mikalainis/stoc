@@ -1,0 +1,40 @@
+name: CI Test Bot
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test-bot:
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+
+    - name: Run Test Mode
+      env:
+        # Secrets are required even for test mode, but we can use dummy values if needed for build verification,
+        # though integration tests require real keys.
+        # Assuming GitHub Secrets are populated.
+        GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        ALPACA_API_KEY: ${{ secrets.ALPACA_API_KEY }}
+        ALPACA_SECRET: ${{ secrets.ALPACA_SECRET }}
+        SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+        SLACK_CHANNEL: ${{ secrets.SLACK_CHANNEL }}
+        ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
+        GCS_BUCKET_NAME: ${{ secrets.GCS_BUCKET_NAME }}
+        FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        IS_PAPER: "True"
+      run: |
+        python main.py --test
