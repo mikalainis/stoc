@@ -12,6 +12,7 @@ from typing import Callable, Optional, List, Dict, Set, Union
 
 import pandas as pd
 import nest_asyncio
+import requests
 
 # --- THIRD PARTY IMPORTS ---
 from google import genai
@@ -48,19 +49,21 @@ USER_SETTINGS = {
     "MAX_POS_PERCENT": 0.05,      # Max Portfolio % size per single stock (5% Cap)
     "MIN_CONFIDENCE": 85,         # % AI Confidence required to Buy
     "RSI_BUY_THRESHOLD": 35,      # Buy if RSI is below this (Dip Buying)
-    
+
     # --- DISCOVERY ENGINE ---
     "TOP_N_STOCKS": 40,           # Number of stocks to hunt for
     "ANALYSIS_COOLDOWN_HOURS": 24,# Don't re-scan a rejected stock for X hours
     "EXECUTION_TIMEOUT_SECONDS": 60, # Kill analysis if it hangs > 60s
-    
+
     # --- TECHNICALS ---
     "RSI_PERIOD": 14,             # Standard RSI Lookback
     "DATA_LOOKBACK_DAYS": 45,     # Days of history to fetch for math accuracy
-    
+
     # --- INFRASTRUCTURE ---
     "SLACK_CHANNEL": "D0A1C7TBB5E",
-    "GCS_BUCKET_NAME": None       # Auto-loaded from Env Var in Cloud
+    "GCS_BUCKET_NAME": None,       # Auto-loaded from Env Var in Cloud
+    "ALPHA_VANTAGE_KEY": "D8HPKBQ0AKCA8FUI",
+    "FMP_API_KEY": "waiwr0TJe2NKRuPo5ceRF4xmjtp2k9uv"
 }
 # ==========================================
 
@@ -74,7 +77,9 @@ class Config:
     SLACK_CHANNEL: str
     IS_PAPER: bool
     GCS_BUCKET_NAME: Optional[str]
-    
+    ALPHA_VANTAGE_KEY: Optional[str]
+    FMP_API_KEY: Optional[str]
+
     TRADE_ALLOCATION: float
     MAX_POS_PERCENT: float
     MIN_CONFIDENCE: int
@@ -107,9 +112,11 @@ class Config:
             "SLACK_TOKEN": get_secret("SLACK_BOT_TOKEN"),
             "SLACK_CHANNEL": get_param("SLACK_CHANNEL", str),
             "GCS_BUCKET_NAME": get_param("GCS_BUCKET_NAME", str),
-            
+            "ALPHA_VANTAGE_KEY": get_param("ALPHA_VANTAGE_KEY", str),
+            "FMP_API_KEY": get_param("FMP_API_KEY", str),
+
             "IS_PAPER": True, # Set to False for Real Money
-            
+
             # Load Strategy Params
             "TRADE_ALLOCATION": get_param("TRADE_ALLOCATION", float),
             "MAX_POS_PERCENT": get_param("MAX_POS_PERCENT", float),
@@ -125,8 +132,15 @@ class Config:
         # Validate Critical Secrets
         missing = [k for k in ["GOOGLE_KEY", "ALPACA_KEY", "ALPACA_SECRET", "SLACK_TOKEN"] if not secrets[k]]
         if missing:
-            logger.critical(f"Missing Critical Secrets: {missing}")
-            sys.exit(1)
+            print(f"DEBUG: sys.argv={sys.argv}")
+            # RELAXED CHECK FOR TEST MODE
+            if "--test" in sys.argv:
+                logger.warning(f"⚠️ MISSING SECRETS IN TEST MODE: {missing}. Using dummy values to proceed with smoke test.")
+                for k in missing:
+                    secrets[k] = "TEST_DUMMY_VALUE"
+            else:
+                logger.critical(f"Missing Critical Secrets: {missing}")
+                sys.exit(1)
 
         return cls(**secrets)
 
@@ -143,7 +157,7 @@ class MarketState:
     current_price: float = 0.0
     current_rsi: float = 0.0
     asset_class: str = "STOCK"
-    position_qty: float = 0.0 
+    position_qty: float = 0.0
 
 from google.cloud import firestore
 import google.auth.exceptions
@@ -153,11 +167,11 @@ class SmartTracker:
     def __init__(self, config: Config, filename="processed_stocks_v4.json"):
         self.filename = filename
         self.bucket_name = config.GCS_BUCKET_NAME
-        
+
         # --- UPDATE THIS BLOCK ---
         try:
             # Explicitly connect to the "stocs" database
-            self.db = firestore.Client(database="stocs") 
+            self.db = firestore.Client(database="stocs")
             self.collection = self.db.collection("darwinian_analysis")
             self.use_firestore = True
             print("   🔥 Connected to Firestore Database: stocs")
@@ -188,7 +202,7 @@ class SmartTracker:
             except Exception as e:
                 print(f"   ❌ Firestore Read Error: {e}")
                 return True # Fail-open (Scan if DB fails)
-        
+
         # B. LOCAL LOGIC
         else:
             if ticker not in self.local_data: return True
@@ -201,7 +215,7 @@ class SmartTracker:
         if timestamp_str:
             last_time = datetime.fromisoformat(timestamp_str).replace(tzinfo=timezone.utc)
             hours = (datetime.now(timezone.utc) - last_time).total_seconds() / 3600
-            
+
             if hours >= config.ANALYSIS_COOLDOWN_HOURS:
                 print(f"   🔄 Re-scan {ticker}: Expired ({hours:.1f}h)")
                 return True
@@ -209,7 +223,7 @@ class SmartTracker:
         # Re-Evaluation Logic
         last_sent = data.get("sentiment_score", 0)
         last_rsi = data.get("current_rsi", 100)
-        
+
         if last_sent >= config.MIN_CONFIDENCE and last_rsi < config.RSI_BUY_THRESHOLD:
             print(f"   ⚡ Re-evaluating {ticker}: Meets new criteria.")
             return True
@@ -219,7 +233,7 @@ class SmartTracker:
 
     def mark_processed(self, state: MarketState):
         record = asdict(state)
-        
+
         if self.use_firestore:
             try:
                 # Add server timestamp for sorting in Cloud Console
@@ -265,11 +279,11 @@ class DarwinianSwarm:
             if not bars.data:
                 print(f"   ⚠️ No Data for {self.state.ticker}")
                 return False
-            
+
             df = bars.df
             if isinstance(df.index, pd.MultiIndex): df = df.reset_index()
             df.columns = [c.lower() for c in df.columns]
-            
+
             # RSI Calculation
             delta = df['close'].diff()
             gain = (delta.where(delta > 0, 0)).fillna(0)
@@ -289,15 +303,28 @@ class DarwinianSwarm:
     # --- PIPELINE: News ---
     def fetch_news_context(self) -> bool:
         try:
-            today = datetime.now().strftime("%Y-%m-%d")
-            prompt = f"Find latest news, analyst ratings, and price targets for {self.state.ticker} as of {today}. Summarize in 3 bullet points."
-            response = self.gemini.models.generate_content(
-                model="gemini-2.5-flash-lite", contents=prompt,
-                config=types.GenerateContentConfig(tools=[types.Tool(google_search=types.GoogleSearch())], response_mime_type="text/plain")
-            )
-            self.state.news_summary = response.text if response.text else "No news."
+            url = f"https://www.alphavantage.co/query?function=NEWS_SENTIMENT&tickers={self.state.ticker}&apikey={self.config.ALPHA_VANTAGE_KEY}&limit=10"
+            r = requests.get(url)
+            data = r.json()
+
+            if "feed" not in data:
+                self.state.news_summary = "No news found."
+                return True
+
+            articles = data["feed"][:5] # Top 5
+            summary_lines = []
+            for art in articles:
+                title = art.get('title', 'No Title')
+                sentiment_score = art.get('overall_sentiment_score', 0)
+                sentiment_label = art.get('overall_sentiment_label', 'Neutral')
+                summary = art.get('summary', 'No Summary')
+                summary_lines.append(f"- {title} (Sentiment: {sentiment_label}, Score: {sentiment_score}): {summary}")
+
+            self.state.news_summary = "\n".join(summary_lines) if summary_lines else "No news found."
             return True
-        except: return False
+        except Exception as e:
+            print(f"   ❌ News Error: {e}")
+            return False
 
     # --- PIPELINE: Analysis ---
     def analyze_sentiment(self) -> bool:
@@ -327,27 +354,27 @@ class DarwinianSwarm:
     def calculate_investment_qty(self) -> float:
         try:
             if self.state.current_price <= 0: return 0.0
-            
+
             # 1. Get Portfolio Total Equity
             account = self.alpaca_trade.get_account()
             total_equity = float(account.equity)
-            
+
             # 2. Calculate Cap ($ Limit for this stock)
             max_allowed_value = total_equity * self.config.MAX_POS_PERCENT
-            
+
             # 3. Calculate Current Exposure
             current_value = self.state.position_qty * self.state.current_price
-            
+
             # 4. Determine Remaining "Room"
             available_room = max_allowed_value - current_value
-            
+
             if available_room <= 0:
                 print(f"   🛑 MAX CAP REACHED: Holdings (${current_value:,.0f}) exceed 5% limit. Buying 0.")
                 return 0.0
-            
+
             # 5. Determine Budget (Lesser of Standard Alloc OR Remaining Room)
             investment_amount = min(self.config.TRADE_ALLOCATION, available_room)
-            
+
             if investment_amount < self.state.current_price:
                 return 0.0
 
@@ -382,7 +409,7 @@ class DarwinianSwarm:
         print(f"   🚀 AUTOMATED TRIGGER: BUY {final_qty} {self.state.ticker}...")
         try:
             order = self.alpaca_trade.submit_order(order_data=MarketOrderRequest(symbol=self.state.ticker, qty=final_qty, side=OrderSide.BUY, time_in_force=TimeInForce.GTC))
-            
+
             # --- UPDATED LOG LINE ---
             print(f"   ✅ Order Filled! Bought {final_qty} shares of {self.state.ticker} at ~${self.state.current_price:.2f}")
             # ------------------------
@@ -412,56 +439,144 @@ class DiscoveryAgent:
         self.config = config
         self.client = genai.Client(api_key=config.GOOGLE_KEY)
 
-    def find_top_picks(self) -> List[str]:
-        target_count = self.config.TOP_N_STOCKS
-        print(f"\n🔎 DISCOVERY MODE: Aggressively hunting for {target_count} stocks...")
-        
-        # --- STEP 1: SEARCH (TEXT MODE - FORCED LIST) ---
-        search_prompt = f"""
-        Perform a Google Search for "Top {target_count} S&P 500 stocks with a Buy rating".
-        
-        TASK:
-        List all stock ticker symbols that currently have >{self.config.MIN_CONFIDENCE}% Buy recommendations.
-        
-        CRITICAL: Provide ONLY a clean, comma-separated list of ticker symbols. Do NOT include any summaries, explanations, or numbers. Find up to {target_count} distinct tickers.
-        """
-
+    def _fetch_sp500_list(self) -> List[str]:
+        url = f"https://financialmodelingprep.com/api/v3/sp500_constituent?apikey={self.config.FMP_API_KEY}"
         try:
-            search_response = self.client.models.generate_content(
-                model="gemini-2.5-flash-lite",
-                contents=search_prompt,
-                config=types.GenerateContentConfig(
-                    tools=[types.Tool(google_search=types.GoogleSearch())],
-                    response_mime_type="text/plain" 
-                )
-            )
-            search_text = search_response.text
-            if not search_text: return []
+            r = requests.get(url)
+            data = r.json()
+            if isinstance(data, list):
+                return [item['symbol'] for item in data]
+            else:
+                print(f"   ⚠️ FMP S&P List Error: {data}")
+                return []
+        except Exception as e:
+            print(f"   ❌ FMP S&P Fetch Error: {e}")
+            return []
+
+    def _check_ticker_criteria(self, ticker: str) -> bool:
+        """
+        Criteria:
+        - Revenue Growth Rate: > 4%
+        - P/E ratio: > 15
+        - Gross profit margin: > 20%
+        - Debt-to-Equity Ratio: <= 1.0
+        - ROE: > 12%
+        - FCF to Sales: > 5%
+        """
+        try:
+            # Initialize vars for safe logging in case of early exit
+            rev_growth = 0.0
+            pe = 0.0
+            gross_margin = 0.0
+            debt_equity = 100.0
+            roe = 0.0
+            fcf_sales = 0.0
+
+            # 1. Fetch Ratios (TTM)
+            ratios_url = f"https://financialmodelingprep.com/api/v3/ratios-ttm/{ticker}?apikey={self.config.FMP_API_KEY}"
+            r_resp = requests.get(ratios_url)
+            r_data = r_resp.json()
             
-            # --- STEP 2: EXTRACTION (JSON MODE - MAXIMIZING PARSING) ---
-            extraction_prompt = f"""
-            Analyze the text below and extract ALL unique, valid stock ticker symbols.
-            Return a JSON list containing up to {target_count} tickers.
-            TEXT: {search_text}
-            """
+            if not isinstance(r_data, list) or not r_data:
+                return False
+
+            r = r_data[0]
             
-            json_response = self.client.models.generate_content(
-                model="gemini-2.5-flash-lite",
-                contents=extraction_prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema={"type": "ARRAY", "items": {"type": "STRING"}}
-                )
-            )
+            pe = r.get('peRatioTTM', 0) or 0
+            gross_margin = r.get('grossProfitMarginTTM', 0) or 0
+            debt_equity = r.get('debtEquityRatioTTM', 100) or 100
+            roe = r.get('returnOnEquityTTM', 0) or 0
             
-            # Use set() to ensure no duplicates, and limit to target_count
-            tickers = list(set(json.loads(json_response.text)))[:target_count]
-            print(f"   🔬 Found {len(tickers)} Candidates: {tickers}")
-            return tickers
+            # 2. Fetch Growth (Revenue Growth)
+            growth_url = f"https://financialmodelingprep.com/api/v3/financial-growth/{ticker}?limit=1&apikey={self.config.FMP_API_KEY}"
+            g_resp = requests.get(growth_url)
+            g_data = g_resp.json()
+
+            if not isinstance(g_data, list) or not g_data:
+                pass # Continue to allow partial logging if possible, though logic usually needs all
+            else:
+                rev_growth = g_data[0].get('revenueGrowth', 0) or 0
+
+            # 3. Check FCF to Sales
+            fcf_ps = r.get('freeCashFlowPerShareTTM', 0) or 0
+            rev_ps = r.get('revenuePerShareTTM', 0) or 0
+
+            if rev_ps != 0:
+                fcf_sales = fcf_ps / rev_ps
+
+            # EVALUATE
+            pass_pe = pe > 15
+            pass_gm = gross_margin > 0.20
+            pass_de = debt_equity <= 1.0
+            pass_roe = roe > 0.12
+            pass_growth = rev_growth > 0.04
+            pass_fcf = fcf_sales > 0.05
+
+            if pass_pe and pass_gm and pass_de and pass_roe and pass_growth and pass_fcf:
+                print(f"   ✅ MATCH: {ticker}\n"
+                      f"      Growth: {rev_growth:.1%} (✅)\n"
+                      f"      PE Ratio: {pe:.1f} (✅)\n"
+                      f"      Gross Margin: {gross_margin:.1%} (✅)\n"
+                      f"      Debt/Equity: {debt_equity:.2f} (✅)\n"
+                      f"      ROE: {roe:.1%} (✅)\n"
+                      f"      FCF/Sales: {fcf_sales:.1%} (✅)")
+                return True
+            else:
+                # Explicit rejection logging for visibility in test mode
+                if "--test" in sys.argv:
+                     print(f"   ❌ SKIP: {ticker}\n"
+                           f"      Growth: {rev_growth:.1%} ({'✅' if pass_growth else '❌ < 4%'})\n"
+                           f"      PE Ratio: {pe:.1f} ({'✅' if pass_pe else '❌ > 15'})\n"
+                           f"      Gross Margin: {gross_margin:.1%} ({'✅' if pass_gm else '❌ > 20%'})\n"
+                           f"      Debt/Equity: {debt_equity:.2f} ({'✅' if pass_de else '❌ <= 1.0'})\n"
+                           f"      ROE: {roe:.1%} ({'✅' if pass_roe else '❌ > 12%'})\n"
+                           f"      FCF/Sales: {fcf_sales:.1%} ({'✅' if pass_fcf else '❌ > 5%'})")
+                return False
 
         except Exception as e:
-            logger.error(f"Discovery Failed: {e}")
-            return []
+            if "--test" in sys.argv:
+                print(f"   ⚠️ ERROR Checking {ticker}: {e}")
+            return False
+
+    def find_top_picks(self) -> List[str]:
+        target_count = self.config.TOP_N_STOCKS
+        print(f"\n🔎 DISCOVERY MODE: Filtering S&P 500 via FMP...")
+
+        # 1. Get Universe
+        tickers = self._fetch_sp500_list()
+
+        # FALLBACK: If API fails (e.g. Restricted Key), use a static list of top S&P 500 to allow process to continue
+        if not tickers:
+            print("   ⚠️ Fetch failed (likely Key Restriction). Using static Top 30 S&P list for fallback.")
+            tickers = [
+                "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK.B", "LLY", "AVGO",
+                "JPM", "V", "UNH", "XOM", "MA", "JNJ", "PG", "HD", "COST", "MRK",
+                "ABBV", "CVX", "CRM", "BAC", "WMT", "AMD", "ACN", "PEP", "LIN", "MCD"
+            ]
+
+        print(f"   🔬 Scanning {len(tickers)} stocks for criteria...")
+
+        # 2. Parallel Scan
+        qualifying_tickers = []
+        # Limit concurrency to avoid rate limits (though FMP is usually generous)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_ticker = {executor.submit(self._check_ticker_criteria, t): t for t in tickers}
+
+            count = 0
+            for future in concurrent.futures.as_completed(future_to_ticker):
+                count += 1
+                if count % 20 == 0:
+                    print(f"      Progress: {count}/{len(tickers)}...")
+
+                t = future_to_ticker[future]
+                try:
+                    if future.result():
+                        qualifying_tickers.append(t)
+                except Exception as e:
+                    pass
+
+        print(f"   🎯 Found {len(qualifying_tickers)} matches: {qualifying_tickers}")
+        return qualifying_tickers[:target_count]
 
 # --- 7. PORTFOLIO MANAGER (Unified Threading) ---
 class PortfolioAudit:
@@ -469,6 +584,9 @@ class PortfolioAudit:
         self.config = config
         self.alpaca = TradingClient(config.ALPACA_KEY, config.ALPACA_SECRET, paper=config.IS_PAPER)
         self.discovery = DiscoveryAgent(config)
+
+        # FIX: Instantiate the correct class name (SmartTracker)
+        # This is what enables the Firestore/JSON fallback logic.
         self.tracker = SmartTracker(config)
 
     def is_market_open(self) -> bool:
@@ -483,17 +601,22 @@ class PortfolioAudit:
 
     def scan(self):
         print(f"\n🕵️‍♂️ STARTING AUTOMATED AUDIT (Timeout: {self.config.EXECUTION_TIMEOUT_SECONDS}s)")
-        
+
         if not self.is_market_open():
             print("   💤 Market Closed.")
             return
 
-        try: 
+        try:
             positions = self.alpaca.get_all_positions()
             portfolio_map = {p.symbol: float(p.qty) for p in positions}
         except Exception as e:
-            print(f"❌ Alpaca Error: {e}")
-            return
+            # In test mode with dummy secrets, Alpaca might fail. We should allow discovery scan to proceed if it's test mode.
+            if "--test" in sys.argv:
+                print(f"   ⚠️ Alpaca Error (Expected in Test Mode): {e}")
+                portfolio_map = {}
+            else:
+                print(f"❌ Alpaca Error: {e}")
+                return
 
         # Determine List
         targets = []
@@ -512,7 +635,7 @@ class PortfolioAudit:
         # Process List
         for i, (ticker, qty) in enumerate(targets, 1):
             print(f"\n🔹 [{i}/{len(targets)}] Processing: {ticker} (Owned: {qty})")
-            
+
             # Skip if recently analyzed AND we don't own it (Discovery only)
             if qty == 0 and not self.tracker.should_rescan(ticker, self.config):
                 continue
@@ -526,10 +649,18 @@ class PortfolioAudit:
                 print(f"   ⏱️ TIMEOUT: {ticker} skipped.")
             except Exception as e:
                 print(f"   ❌ ERROR: {e}")
-            
+
             time.sleep(2)
 
 # --- MAIN ---
 if __name__ == "__main__":
     conf = Config.load()
+
+    if "--test" in sys.argv:
+        print("🧪 TEST MODE ENABLED: Checking 1 stock only with 20s timeout.")
+        # Override config for testing by creating a new instance with modified values
+        # Since Config is frozen, we use object.__setattr__ to bypass (hacky but effective for this script)
+        object.__setattr__(conf, 'TOP_N_STOCKS', 1)
+        object.__setattr__(conf, 'EXECUTION_TIMEOUT_SECONDS', 20)
+
     PortfolioAudit(conf).scan()
