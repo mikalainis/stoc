@@ -336,7 +336,9 @@ class DarwinianAnalyst:
             if self.state.pe_ratio == 0 and self.state.growth_rate == 0: return False
             self.state.fundamentals_valid = True
             return True
-        except: return False
+        except Exception as e:
+            print(f"   ❌ News Error: {e}")
+            return False
 
     def fetch_news(self) -> bool:
         try:
