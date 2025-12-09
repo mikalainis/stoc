@@ -11,6 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy logic
 COPY main.py .
+COPY weekend_recap.py .
 
 # Run application
 CMD ["python", "main.py"]

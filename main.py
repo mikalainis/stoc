@@ -641,7 +641,7 @@ class PortfolioManager:
             result_entry["Reason"] = f"Error: {str(e)[:20]}"
             print(f"   ❌ Process Error: {e}")
             traceback.print_exc()
-        
+
         self.scan_results.append(result_entry)
 
     # --- EXECUTION METHODS ---
