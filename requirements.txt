@@ -8,5 +8,3 @@ google-cloud-firestore
 requests
 yfinance
 lxml
-yfinance
-lxml

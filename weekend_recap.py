@@ -17,37 +17,42 @@ except ImportError:
 # --- Third-Party Imports ---
 import yfinance as yf
 from slack_sdk import WebClient
+from google.cloud import firestore
 
 # --- Constants ---
-LOCAL_DATA_FILE = "processed_stocks_v4.json"
+# LOCAL_DATA_FILE = "processed_stocks_v4.json" # Deprecated
 WEEK_DAYS = 7 # Use 7 days to cover the entire week including weekend non-trading days
 
 class WeekendAuditor:
     """
-    The Auditor reads the local trade history, calculates weekly performance,
+    The Auditor reads the trade history from Firestore, calculates weekly performance,
     and sends a non-trading summary report to Slack.
 
-    Version: V4.2 Final
+    Version: V4.3 Firestore
     """
     def __init__(self):
         print("Auditor Initializing...")
         self.cfg = Config.load()
         self.slack = WebClient(token=self.cfg.SLACK_TOKEN)
         self.data: Dict[str, Any] = {}
-        self._load_local_data()
+        self._load_data()
 
-    def _load_local_data(self):
-        """Loads the trade history from the JSON file."""
-        if not os.path.exists(LOCAL_DATA_FILE):
-            print(f"⚠️ Warning: Local file '{LOCAL_DATA_FILE}' not found. No data to process.")
-            return
-
+    def _load_data(self):
+        """Loads the trade history from Firestore."""
         try:
-            with open(LOCAL_DATA_FILE, 'r') as f:
-                self.data = json.load(f)
-            print(f"✅ Loaded {len(self.data)} historical trade records.")
+            print("   ☁️ Connecting to Firestore (DB: stocs)...")
+            db = firestore.Client(database="stocs")
+            collection = db.collection("darwinian_analysis")
+            docs = collection.stream()
+
+            self.data = {}
+            for doc in docs:
+                self.data[doc.id] = doc.to_dict()
+
+            print(f"✅ Loaded {len(self.data)} trade records from Firestore.")
+
         except Exception as e:
-            print(f"❌ Error loading JSON data: {e}. Starting with empty data.")
+            print(f"❌ Error loading Firestore data: {e}")
             self.data = {}
 
     def _calculate_weekly_metrics(self) -> Dict[str, Any]:
@@ -60,13 +65,18 @@ class WeekendAuditor:
 
         # --- FIX: Ensure critical columns exist with safe defaults (0.0) ---
 
-        required_cols = ['position_qty', 'avg_entry_price', 'current_price', 'PL', 'TotalValue']
+        required_cols = ['position_qty', 'avg_entry_price', 'current_price', 'PL', 'TotalValue', 'updated_at', 'Action', 'ticker']
         for col in required_cols:
             if col not in df.columns:
-                df[col] = 0.0
+                # Assign appropriate default values based on column type expectation
+                if col in ['updated_at', 'Action', 'ticker']:
+                    df[col] = "" # or None
+                else:
+                    df[col] = 0.0
 
         # Standardize data types
-        df['updated_at'] = pd.to_datetime(df['updated_at'], errors='coerce')
+        # Handle Firestore datetime objects or string ISO formats
+        df['updated_at'] = pd.to_datetime(df['updated_at'], errors='coerce', utc=True)
 
         # --- 1. Realized P/L (from Sells closed this week) ---
         week_start = datetime.now(timezone.utc) - timedelta(days=WEEK_DAYS)
@@ -78,7 +88,13 @@ class WeekendAuditor:
         total_realized_pl, total_trades, wins = 0.0, 0, 0
         if not weekly_sells.empty:
             # Clean and calculate P/L for realized trades
-            weekly_sells['PL_PCT'] = weekly_sells['PL'].str.rstrip('%').astype(float, errors='ignore').replace(np.nan, 0) / 100
+            # Assuming PL is stored as string "X%" or similar, or float
+            # Check data type of PL
+            if weekly_sells['PL'].dtype == object:
+                 weekly_sells['PL_PCT'] = weekly_sells['PL'].str.rstrip('%').astype(float, errors='ignore').replace(np.nan, 0) / 100
+            else:
+                 weekly_sells['PL_PCT'] = weekly_sells['PL']
+
             weekly_sells['TotalValue'] = pd.to_numeric(weekly_sells['TotalValue'], errors='coerce').fillna(0)
             weekly_sells['Realized_PL'] = weekly_sells['TotalValue'] * weekly_sells['PL_PCT']
 
@@ -92,32 +108,49 @@ class WeekendAuditor:
         unrealized_pl = 0.0
 
         # Get the LATEST state for all currently held positions (qty > 0)
+        # Note: self.data is keyed by ticker, so we likely have one record per ticker (the latest).
+        # However, checking 'updated_at' is good practice if we had history, but here we likely just have current state per ticker.
+        # The logic below assumes df contains unique tickers if loaded from self.data[doc.id].
+
         current_positions = df[
             (df['position_qty'] > 0)
-        ].sort_values(by='updated_at').drop_duplicates(subset=['ticker'], keep='last')
+        ].copy()
 
         if not current_positions.empty:
             symbols = current_positions['ticker'].tolist()
-            print(f"   Fetching live prices for {len(symbols)} held positions...")
+            # Filter out empty symbols
+            symbols = [s for s in symbols if s]
 
-            try:
-                live_prices_df = yf.download(symbols, period="1d", interval="1m", progress=False)['Close']
+            if symbols:
+                print(f"   Fetching live prices for {len(symbols)} held positions...")
 
-                if isinstance(live_prices_df, pd.Series):
-                    live_prices = {symbols[0]: live_prices_df.iloc[-1]}
-                else:
-                    live_prices = live_prices_df.iloc[-1].to_dict()
+                try:
+                    # yfinance download
+                    live_prices_df = yf.download(symbols, period="1d", interval="1m", progress=False)['Close']
 
-                for _, pos in current_positions.iterrows():
-                    ticker = pos['ticker']
-                    qty = pos['position_qty']
-                    entry_price = pos['avg_entry_price']
-                    current_price = live_prices.get(ticker, entry_price)
+                    live_prices = {}
+                    if not live_prices_df.empty:
+                        if isinstance(live_prices_df, pd.Series):
+                            # Single symbol result
+                            live_prices = {symbols[0]: live_prices_df.iloc[-1]}
+                        else:
+                            # Multiple symbols
+                            live_prices = live_prices_df.iloc[-1].to_dict()
 
-                    if entry_price > 0 and current_price > 0:
-                        unrealized_pl += qty * (current_price - entry_price)
-            except Exception as e:
-                print(f"   ⚠️ Error fetching live prices: {e}. Unrealized P/L may be inaccurate.")
+                    for _, pos in current_positions.iterrows():
+                        ticker = pos['ticker']
+                        qty = float(pos['position_qty'])
+                        entry_price = float(pos['avg_entry_price']) if pos['avg_entry_price'] else 0.0
+                        current_price = live_prices.get(ticker, entry_price)
+
+                        # Fallback if yfinance failed for this ticker, try to use price in DB
+                        if pd.isna(current_price):
+                             current_price = float(pos['current_price']) if pos['current_price'] else entry_price
+
+                        if entry_price > 0 and current_price > 0:
+                            unrealized_pl += qty * (current_price - entry_price)
+                except Exception as e:
+                    print(f"   ⚠️ Error fetching live prices: {e}. Unrealized P/L may be inaccurate.")
 
         # --- 3. Final Metrics ---
         total_net_profit = total_realized_pl + unrealized_pl
@@ -142,7 +175,7 @@ class WeekendAuditor:
         emoji = "💰" if profit >= 0 else "📉"
 
         blocks = [
-            {"type": "header", "text": {"type": "plain_text", "text": f"🥂 DarwinianSwarm V4.2 Final Recap"}},
+            {"type": "header", "text": {"type": "plain_text", "text": f"🥂 DarwinianSwarm V4.3 Recap"}},
             {"type": "section", "text": {"type": "mrkdwn", "text": f"*Weekly Net P/L:* {emoji} *${profit:,.2f}*"}},
             {"type": "section", "fields": [
                 {"type": "mrkdwn", "text": f"*Realized (Sells):* ${realized_pl:,.2f}"},
