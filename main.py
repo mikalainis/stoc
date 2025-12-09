@@ -164,8 +164,8 @@ class DiscoveryAgent:
     def get_universe(self, priority_sectors: List[str] = None) -> List[str]:
         # TEST MODE OVERRIDE
         if "--test" in sys.argv:
-            print("\n🌌 DISCOVERY AGENT: Test Mode - Returning 10 Popular Tickers.")
-            return ["AAPL", "MSFT", "GOOGL", "AMZN", "TSLA", "NVDA", "META", "NFLX", "AMD", "INTC"]
+            print("\n🌌 DISCOVERY AGENT: Test Mode - Returning Single Stock (AAPL).")
+            return ["AAPL"]
 
         print("\n🌌 DISCOVERY AGENT: Fetching S&P 500 Universe (Wikipedia)...")
 
@@ -641,7 +641,7 @@ class PortfolioManager:
             result_entry["Reason"] = f"Error: {str(e)[:20]}"
             print(f"   ❌ Process Error: {e}")
             traceback.print_exc()
-        
+
         self.scan_results.append(result_entry)
 
     # --- EXECUTION METHODS ---
@@ -683,14 +683,10 @@ class PortfolioManager:
     # --- RUN LOOP ---
     def run(self):
         try:
-            try:
-                alpaca_pos = self.alpaca.get_all_positions()
-                positions = {}
-                for p in alpaca_pos:
-                    positions[p.symbol] = {"qty": float(p.qty), "entry": float(p.avg_entry_price)}
-            except Exception as e:
-                print(f"   ⚠️ Alpaca Auth Error (Expected in Test Mode): {e}")
-                positions = {}
+            alpaca_pos = self.alpaca.get_all_positions()
+            positions = {}
+            for p in alpaca_pos:
+                positions[p.symbol] = {"qty": float(p.qty), "entry": float(p.avg_entry_price)}
 
             targets = self.discovery.get_universe()
             all_targets = set(targets + list(positions.keys()))
@@ -798,9 +794,9 @@ if __name__ == "__main__":
 
         # TEST MODE OVERRIDE
         if "--test" in sys.argv:
-            print("🧪 TEST MODE ENABLED: Checking 10 stocks.")
+            print("🧪 TEST MODE ENABLED: Checking 1 stock only with 20s timeout.")
             # Override config for testing by using object.__setattr__ to bypass frozen state
-            object.__setattr__(cfg, 'TOP_N_STOCKS', 10)
+            object.__setattr__(cfg, 'TOP_N_STOCKS', 1)
             # We don't need EXECUTION_TIMEOUT_SECONDS in this new code structure,
             # but we ensure only 1 stock is picked.
 
