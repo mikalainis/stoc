@@ -55,7 +55,7 @@ jobs:
       # 5. Deploy Cloud Run Job
       - name: Deploy Cloud Run Job
         run: |
-          gcloud run jobs deploy darwinian-swarm-job \
+          gcloud run jobs deploy darwinian-trader-v4 \
             --image ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest \
             --region ${{ secrets.GCP_REGION }} \
             --service-account ${{ secrets.GCP_SA_EMAIL }} \
@@ -69,12 +69,34 @@ jobs:
             --task-timeout 300s \
             --quiet
 
-      # 6. UPDATE SCHEDULER (NEW STEP)
-      - name: Update Cloud Scheduler
+      # 6. UPDATE SCHEDULER (Hourly Trade)
+      - name: Update Hourly Scheduler
         run: |
           gcloud scheduler jobs update http darwinian-hourly \
             --schedule "${{ env.CRON_SCHEDULE }}" \
             --location ${{ secrets.GCP_REGION }} \
-            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-swarm-job:run" \
+            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
+            --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
+            --quiet || gcloud scheduler jobs create http darwinian-hourly \
+            --schedule "${{ env.CRON_SCHEDULE }}" \
+            --location ${{ secrets.GCP_REGION }} \
+            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
+            --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
+            --quiet
+
+      # 7. UPDATE SCHEDULER (Weekly Recap)
+      - name: Update Weekly Recap Scheduler
+        run: |
+          gcloud scheduler jobs update http weekly-recap-audit \
+            --schedule "30 17 * * 5" \
+            --location ${{ secrets.GCP_REGION }} \
+            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
+            --message-body '{"overrides": {"containerOverrides": [{"args": ["python", "weekend_recap.py"]}]}}' \
+            --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
+            --quiet || gcloud scheduler jobs create http weekly-recap-audit \
+            --schedule "30 17 * * 5" \
+            --location ${{ secrets.GCP_REGION }} \
+            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
+            --message-body '{"overrides": {"containerOverrides": [{"args": ["python", "weekend_recap.py"]}]}}' \
             --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
             --quiet
