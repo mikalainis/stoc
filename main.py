@@ -152,7 +152,7 @@ class DiscoveryAgent:
     def __init__(self, config: Config):
         self.config = config
 
-    def get_universe(self) -> List[str]:
+    def get_universe(self, priority_sectors: List[str] = None) -> List[str]:
         # TEST MODE OVERRIDE
         if "--test" in sys.argv:
             print("\n🌌 DISCOVERY AGENT: Test Mode - Returning Single Stock (AAPL).")
@@ -336,9 +336,7 @@ class DarwinianAnalyst:
             if self.state.pe_ratio == 0 and self.state.growth_rate == 0: return False
             self.state.fundamentals_valid = True
             return True
-        except Exception as e:
-            print(f"   ❌ News Error: {e}")
-            return False
+        except: return False
 
     def fetch_news(self) -> bool:
         try:
@@ -804,6 +802,8 @@ if __name__ == "__main__":
             if "--test" in sys.argv:
                 print(f"⚠️ Macro Analysis Failed in Test Mode (Expected if keys invalid): {e}")
                 regime = "TEST"
+                # Mock leading sectors for test mode if macro failed
+                macro = type('MockMacro', (), {'get_leading_sectors': lambda: []})()
             else:
                 raise e
 
