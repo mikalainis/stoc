@@ -130,16 +130,7 @@ class Config:
             slack_token = slack_token or "dummy_slack"
 
         if not google or not alpaca or not alpaca_sec:
-            print("WARN: Missing Secrets mocked for test")
-            return cls(
-                GOOGLE_KEY="mock",
-                ALPACA_KEY="mock",
-                ALPACA_SECRET="mock",
-                SLACK_TOKEN="mock",
-                SLACK_CHANNEL="mock",
-                IS_PAPER=True,
-                ALPHA_VANTAGE_KEY="mock"
-            )
+            raise ValueError("❌ CRITICAL: Missing Keys in Colab Secrets.")
 
         return cls(
                     GOOGLE_KEY=google,

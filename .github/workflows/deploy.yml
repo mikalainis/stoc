@@ -74,13 +74,11 @@ jobs:
         run: |
           gcloud scheduler jobs update http darwinian-hourly \
             --schedule "${{ env.CRON_SCHEDULE }}" \
-            --time-zone "America/New_York" \
             --location ${{ secrets.GCP_REGION }} \
             --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
             --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
             --quiet || gcloud scheduler jobs create http darwinian-hourly \
             --schedule "${{ env.CRON_SCHEDULE }}" \
-            --time-zone "America/New_York" \
             --location ${{ secrets.GCP_REGION }} \
             --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
             --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
@@ -91,14 +89,12 @@ jobs:
         run: |
           gcloud scheduler jobs update http weekly-recap-audit \
             --schedule "30 17 * * 5" \
-            --time-zone "America/New_York" \
             --location ${{ secrets.GCP_REGION }} \
             --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
             --message-body '{"overrides": {"containerOverrides": [{"args": ["python", "weekend_recap.py"]}]}}' \
             --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
             --quiet || gcloud scheduler jobs create http weekly-recap-audit \
             --schedule "30 17 * * 5" \
-            --time-zone "America/New_York" \
             --location ${{ secrets.GCP_REGION }} \
             --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
             --message-body '{"overrides": {"containerOverrides": [{"args": ["python", "weekend_recap.py"]}]}}' \
