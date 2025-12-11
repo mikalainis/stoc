@@ -79,28 +79,32 @@ class Config:
     # 🚨 EMAIL FIELDS HAVE BEEN REMOVED FROM HERE
 
     # ---------------------------------------------------------
-    # 2. OPTIONAL SETTINGS (Must come last, with defaults)
+    # 2. OPTIONAL SETTINGS (OPTIMIZED FOR SURVIVAL)
     # ---------------------------------------------------------
-    TRADE_ALLOCATION: float = 3000.0
-    MAX_POS_PERCENT: float = 0.05
-    RSI_BUY_THRESHOLD: int = 35
-    RSI_SELL_THRESHOLD: int = 70
+    TRADE_ALLOCATION: float = 2000.0   # Reduced size until win rate improves
+    MAX_POS_PERCENT: float = 0.10
+
+    # 🚨 CRITICAL UPDATE: LOWERED ENTRY THRESHOLD
+    # Was 35. Now 28. We only buy when there is 'blood in the streets'.
+    RSI_BUY_THRESHOLD: int = 28
+
+    RSI_SELL_THRESHOLD: int = 65
     RSI_PERIOD: int = 14
     DATA_LOOKBACK_DAYS: int = 45
-    MIN_CONFIDENCE: int = 85
-    ANALYSIS_COOLDOWN_HOURS: int = 24
-    TOP_N_STOCKS: int = 40
-    
-    # Fundamentals
-    MIN_GROWTH_RATE: float = 0.04
-    MIN_PE_RATIO: float = 15.0
-    MIN_GROSS_MARGIN: float = 0.20
-    MAX_DEBT_EQUITY: float = 1.0
-    MIN_ROE: float = 0.12
+    MIN_CONFIDENCE: int = 90         # AI must be VERY sure
+    ANALYSIS_COOLDOWN_HOURS: int = 2
+    TOP_N_STOCKS: int = 50
 
-    # Sell Logic
-    STOP_LOSS_PCT: float = 0.08
-    MIN_AI_HOLD_SCORE: int = 40
+    # Fundamentals (Quality Filter)
+    MIN_GROWTH_RATE: float = 0.05
+    MIN_PE_RATIO: float = 10.0
+    MIN_GROSS_MARGIN: float = 0.30   # Only high-margin businesses
+    MAX_DEBT_EQUITY: float = 0.8     # Lower debt
+    MIN_ROE: float = 0.15
+
+    # Risk Management
+    STOP_LOSS_PCT: float = 0.06      # Tightened to 6%
+    MIN_AI_HOLD_SCORE: int = 45
 
     @classmethod
     def load(cls) -> "Config":
@@ -556,7 +560,7 @@ class PortfolioManager:
         try:
             print(f"\n🔹 Processing: {ticker} (Owned: {qty_held} @ ${entry_price:.2f})")
             agent = DarwinianAnalyst(ticker, self.config, qty_held)
-            
+
             # --- PIPELINE: Technicals ---
             if not agent.fetch_technicals():
                 result_entry["Reason"] = "Tech Data Missing"
@@ -649,13 +653,34 @@ class PortfolioManager:
         try:
             self.smart_cancel(state.ticker, OrderSide.BUY)
             acct = self.alpaca.get_account()
+
+            # 1. Calculate Quantity
             amt = min(float(acct.buying_power), self.config.TRADE_ALLOCATION)
             qty = int(amt // state.current_price)
-            if qty > 0:
-                print(f"   🚀 ORDER SENT: Buy {qty} {state.ticker}")
-                self.alpaca.submit_order(MarketOrderRequest(symbol=state.ticker, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.GTC))
-                return qty
-            return 0.0
+            if qty <= 0: return 0.0
+
+            # 2. Calculate Stop Price (The Safety Net)
+            # If we buy at 100, Stop is at 94 (6% loss)
+            stop_price = round(state.current_price * (1 - self.config.STOP_LOSS_PCT), 2)
+
+            # 3. Submit Bracket Order (Entry + Stop Loss + Take Profit)
+            # This lives on Alpaca's server, so it works even if your script is off.
+            req = MarketOrderRequest(
+                symbol=state.ticker,
+                qty=qty,
+                side=OrderSide.BUY,
+                time_in_force=TimeInForce.GTC,
+                order_class="bracket",  # <--- CRITICAL: Links the orders
+                stop_loss={"stop_price": stop_price},
+                take_profit={"limit_price": round(state.current_price * 1.15, 2)} # 15% upside target
+            )
+
+            print(f"   🛡️ BRACKET ORDER SENT: Buy {qty} {state.ticker} @ ~${state.current_price}")
+            print(f"      └── 🛑 Hard Stop Loss set at: ${stop_price}")
+
+            self.alpaca.submit_order(req)
+            return qty
+
         except Exception as e:
             print(f"   ❌ Buy Error: {e}")
             return 0.0
