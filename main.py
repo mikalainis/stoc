@@ -65,9 +65,7 @@ def setup_google_auth():
 
 @dataclass(frozen=True)
 class Config:
-    # ---------------------------------------------------------
-    # 1. REQUIRED KEYS (Must come first, no defaults)
-    # ---------------------------------------------------------
+    # 1. REQUIRED KEYS
     GOOGLE_KEY: str
     ALPACA_KEY: str
     ALPACA_SECRET: str
@@ -76,89 +74,93 @@ class Config:
     IS_PAPER: bool
     ALPHA_VANTAGE_KEY: str
 
-    # 🚨 EMAIL FIELDS HAVE BEEN REMOVED FROM HERE
+    # 2. TUNABLE PARAMETERS (Loaded from Cloud Run Env Vars)
+    TRADE_ALLOCATION: float
+    MAX_POS_PERCENT: float
+    RSI_BUY_THRESHOLD: int
+    RSI_SELL_THRESHOLD: int
+    RSI_PERIOD: int
+    DATA_LOOKBACK_DAYS: int
+    MIN_CONFIDENCE: int
+    ANALYSIS_COOLDOWN_HOURS: int
+    TOP_N_STOCKS: int
 
-    # ---------------------------------------------------------
-    # 2. OPTIONAL SETTINGS (OPTIMIZED FOR SURVIVAL)
-    # ---------------------------------------------------------
-    TRADE_ALLOCATION: float = 2000.0   # Reduced size until win rate improves
-    MAX_POS_PERCENT: float = 0.10
+    # Fundamentals
+    MIN_GROWTH_RATE: float
+    MIN_PE_RATIO: float
+    MIN_GROSS_MARGIN: float
+    MAX_DEBT_EQUITY: float
+    MIN_ROE: float
 
-    # 🚨 CRITICAL UPDATE: LOWERED ENTRY THRESHOLD
-    # Was 35. Now 28. We only buy when there is 'blood in the streets'.
-    RSI_BUY_THRESHOLD: int = 28
-
-    RSI_SELL_THRESHOLD: int = 65
-    RSI_PERIOD: int = 14
-    DATA_LOOKBACK_DAYS: int = 45
-    MIN_CONFIDENCE: int = 90         # AI must be VERY sure
-    ANALYSIS_COOLDOWN_HOURS: int = 2
-    TOP_N_STOCKS: int = 50
-
-    # Fundamentals (Quality Filter)
-    MIN_GROWTH_RATE: float = 0.05
-    MIN_PE_RATIO: float = 10.0
-    MIN_GROSS_MARGIN: float = 0.30   # Only high-margin businesses
-    MAX_DEBT_EQUITY: float = 0.8     # Lower debt
-    MIN_ROE: float = 0.15
-
-    # Risk Management
-    STOP_LOSS_PCT: float = 0.06      # Tightened to 6%
-    MIN_AI_HOLD_SCORE: int = 45
+    # Risk
+    STOP_LOSS_PCT: float
+    MIN_AI_HOLD_SCORE: int
 
     @classmethod
     def load(cls) -> "Config":
         def get_secret(key, default=None):
-            try:
-                from google.colab import userdata
-                return userdata.get(key)
-            except: pass
-            return os.getenv(key, default)
+            # Check Env Var first (Cloud Run), then Secrets
+            val = os.getenv(key, default)
+            if val is None:
+                try:
+                    from google.colab import userdata
+                    val = userdata.get(key)
+                except: pass
+            return val
 
-        # 1. Load Keys
+        # 1. Load API Keys
         google = get_secret("GOOGLE_API_KEY")
         alpaca = get_secret("ALPACA_API_KEY")
         alpaca_sec = get_secret("ALPACA_SECRET")
         slack_token = get_secret("SLACK_BOT_TOKEN")
 
-        # 2. Load Optional Keys
-        fmp = get_secret("FMP_API_KEY", "demo")
-        alpha = get_secret("ALPHA_VANTAGE_KEY", "demo")
-        channel = get_secret("SLACK_CHANNEL", "#general")
-
-        # TEST MODE SECRET BYPASS
+        # Test Mode Bypass
         if "--test" in sys.argv:
-            google = google or "dummy_google"
-            alpaca = alpaca or "dummy_alpaca"
-            alpaca_sec = alpaca_sec or "dummy_secret"
-            slack_token = slack_token or "dummy_slack"
+            google = google or "dummy"
+            alpaca = alpaca or "dummy"
+            alpaca_sec = alpaca_sec or "dummy"
+            slack_token = slack_token or "dummy"
 
-        if not google or not alpaca or not alpaca_sec:
-            print("WARN: Missing Secrets mocked for test")
-            return cls(
-                GOOGLE_KEY="mock",
-                ALPACA_KEY="mock",
-                ALPACA_SECRET="mock",
-                SLACK_TOKEN="mock",
-                SLACK_CHANNEL="mock",
-                IS_PAPER=True,
-                ALPHA_VANTAGE_KEY="mock"
-            )
+        if not google or not alpaca:
+            raise ValueError("❌ CRITICAL: Missing API Keys.")
+
+        # 2. Load Tunable Parameters (With Fallback Defaults)
+        # format: os.getenv("ENV_VAR_NAME", "DEFAULT_VALUE")
 
         return cls(
-                    GOOGLE_KEY=google,
-                    ALPACA_KEY=alpaca,
-                    ALPACA_SECRET=alpaca_sec,
-                    SLACK_TOKEN=slack_token,
-                    SLACK_CHANNEL=channel,
-                    IS_PAPER=True,
-                    ALPHA_VANTAGE_KEY=alpha,
-                    # FMP line is GONE
+            GOOGLE_KEY=google,
+            ALPACA_KEY=alpaca,
+            ALPACA_SECRET=alpaca_sec,
+            SLACK_TOKEN=slack_token,
+            SLACK_CHANNEL=get_secret("SLACK_CHANNEL", "#general"),
+            IS_PAPER=True, # Or os.getenv("IS_PAPER", "True") == "True"
+            ALPHA_VANTAGE_KEY=get_secret("ALPHA_VANTAGE_KEY", "demo"),
 
-                    STOP_LOSS_PCT=float(os.getenv("STOP_LOSS_PCT", 0.08)),
-                    RSI_SELL_THRESHOLD=int(os.getenv("RSI_SELL_THRESHOLD", 70)),
-                    TOP_N_STOCKS=int(os.getenv("TOP_N_STOCKS", 40))
-                )
+            # --- DYNAMIC TUNING VARIABLES ---
+            TRADE_ALLOCATION=float(os.getenv("TRADE_ALLOCATION", "2000.0")),
+            MAX_POS_PERCENT=float(os.getenv("MAX_POS_PERCENT", "0.10")),
+
+            # The "Survival Mode" Defaults
+            RSI_BUY_THRESHOLD=int(os.getenv("RSI_BUY_THRESHOLD", "28")),
+            RSI_SELL_THRESHOLD=int(os.getenv("RSI_SELL_THRESHOLD", "65")),
+            RSI_PERIOD=int(os.getenv("RSI_PERIOD", "14")),
+
+            DATA_LOOKBACK_DAYS=int(os.getenv("DATA_LOOKBACK_DAYS", "45")),
+            MIN_CONFIDENCE=int(os.getenv("MIN_CONFIDENCE", "90")),
+            ANALYSIS_COOLDOWN_HOURS=int(os.getenv("ANALYSIS_COOLDOWN_HOURS", "2")),
+            TOP_N_STOCKS=int(os.getenv("TOP_N_STOCKS", "50")),
+
+            # Fundamentals
+            MIN_GROWTH_RATE=float(os.getenv("MIN_GROWTH_RATE", "0.05")),
+            MIN_PE_RATIO=float(os.getenv("MIN_PE_RATIO", "10.0")),
+            MIN_GROSS_MARGIN=float(os.getenv("MIN_GROSS_MARGIN", "0.30")),
+            MAX_DEBT_EQUITY=float(os.getenv("MAX_DEBT_EQUITY", "0.8")),
+            MIN_ROE=float(os.getenv("MIN_ROE", "0.15")),
+
+            # Risk
+            STOP_LOSS_PCT=float(os.getenv("STOP_LOSS_PCT", "0.06")), # 6%
+            MIN_AI_HOLD_SCORE=int(os.getenv("MIN_AI_HOLD_SCORE", "45"))
+        )
 
 # --- 3. DISCOVERY AGENT (The Wiki Fix) ---
 class DiscoveryAgent:
@@ -182,10 +184,10 @@ class DiscoveryAgent:
         if sp500:
             # Use EXACTLY the number from Config
             target_count = self.config.TOP_N_STOCKS
-            
+
             # Ensure we don't crash if target > available
             picks = random.sample(sp500, min(len(sp500), target_count))
-            
+
             universe.update(picks)
             print(f"   🎲 Added {len(picks)} random S&P 500 picks (Target: {target_count}).")
 
@@ -229,7 +231,7 @@ class HybridTracker:
         self.use_cloud = False
         self.local_file = local_file
         self.local_data = self._load_local()
-        
+
         if use_cloud and firestore:
             print("   🔗 Connecting to Database...")
             try:
@@ -264,7 +266,7 @@ class HybridTracker:
         else:
             if ticker in self.local_data:
                 last_ts = self.local_data[ticker].get("analysis_timestamp", "")
-        
+
         if not last_ts: return True
         try:
             last_dt = datetime.fromisoformat(last_ts).replace(tzinfo=timezone.utc)
@@ -318,7 +320,7 @@ class DarwinianAnalyst:
             req = StockBarsRequest(symbol_or_symbols=self.ticker, timeframe=TimeFrame.Hour, start=start, limit=200)
             bars = self.alpaca_data.get_stock_bars(req)
             if not bars.data: return False
-            
+
             df = bars.df
             if isinstance(df.index, pd.MultiIndex): df = df.reset_index()
             df.columns = [c.lower() for c in df.columns]
@@ -451,7 +453,7 @@ class MacroAnalyst:
             # We need the VIX to check for immediate panic.
             spy = yf.Ticker("SPY").history(period="1y")
             vix = yf.Ticker("^VIX").history(period="5d")
-            
+
             if spy.empty or vix.empty:
                 print("   ⚠️ Macro Data Unavailable (Network Error?). Defaulting to NEUTRAL.")
                 return "NEUTRAL"
@@ -461,9 +463,9 @@ class MacroAnalyst:
             # The 200-day SMA is the "Line in the Sand" for institutional investors.
             # Above = Bull Market. Below = Bear Market.
             sma_200 = spy['Close'].rolling(window=200).mean().iloc[-1]
-            
+
             current_vix = vix['Close'].iloc[-1]
-            
+
             # 3. DEFINE LOGIC GATES
             is_uptrend = current_spy > sma_200      # Is price above long-term average?
             is_extreme_fear = current_vix > 30      # Is VIX screaming panic?
@@ -472,17 +474,17 @@ class MacroAnalyst:
             print(f"   📊 SPY: ${current_spy:.2f} (200-SMA: ${sma_200:.2f}) | VIX: {current_vix:.2f}")
 
             # 4. DETERMINE REGIME
-            
+
             # --- SCENARIO A: BEAR / DEFENSIVE ---
             # If the trend is broken OR fear is extreme, we must protect capital.
             if not is_uptrend or is_extreme_fear:
                 return self._activate_bear_mode(current_vix, current_spy, sma_200)
-            
+
             # --- SCENARIO B: BULL / AGGRESSIVE ---
             # If trend is up AND markets are calm, we can be greedy.
             elif is_uptrend and is_calm:
                 return self._activate_bull_mode()
-            
+
             # --- SCENARIO C: NEUTRAL ---
             # Sideways chop. Keep standard settings.
             else:
@@ -571,7 +573,9 @@ class PortfolioManager:
             result_entry.update({"Price": round(curr_price, 2), "RSI": round(agent.state.current_rsi, 2)})
 
             # --- SELL LOGIC ---
+
             if is_owned:
+
                 pl_pct = (curr_price - entry_price) / entry_price if entry_price > 0 else 0
                 result_entry["PL"] = f"{pl_pct:.1%}"
 
@@ -583,7 +587,7 @@ class PortfolioManager:
 
                 if sell_reason:
                     print(f"   📉 EXECUTE SELL: {ticker} ({sell_reason})")
-                    self.execute_sell(ticker, qty_held, sell_reason)
+                    self.execute_sell(ticker, qty_held, sell_reason, curr_price)
                     result_entry.update({
                         "Action": "EXECUTED_SELL",
                         "Reason": sell_reason,
@@ -624,7 +628,13 @@ class PortfolioManager:
                 return
 
             # --- BUY LOGIC ---
-            if not is_owned and s.decision == "BUY" and s.current_rsi < self.config.RSI_BUY_THRESHOLD:
+            # OLD (Risky - trusts the text "BUY" even if score is low)
+              # NEW (Strict - requires both "BUY" command AND High Score)
+            if not is_owned and \
+              s.decision == "BUY" and \
+              s.sentiment_score >= self.config.MIN_CONFIDENCE and \
+              s.current_rsi < self.config.RSI_BUY_THRESHOLD:
+
                 qty_bought = self.execute_buy(agent.state)
                 if qty_bought > 0:
                     final_qty = qty_held + qty_bought
@@ -653,45 +663,34 @@ class PortfolioManager:
         try:
             self.smart_cancel(state.ticker, OrderSide.BUY)
             acct = self.alpaca.get_account()
-
-            # 1. Calculate Quantity
             amt = min(float(acct.buying_power), self.config.TRADE_ALLOCATION)
             qty = int(amt // state.current_price)
-            if qty <= 0: return 0.0
-
-            # 2. Calculate Stop Price (The Safety Net)
-            # If we buy at 100, Stop is at 94 (6% loss)
-            stop_price = round(state.current_price * (1 - self.config.STOP_LOSS_PCT), 2)
-
-            # 3. Submit Bracket Order (Entry + Stop Loss + Take Profit)
-            # This lives on Alpaca's server, so it works even if your script is off.
-            req = MarketOrderRequest(
-                symbol=state.ticker,
-                qty=qty,
-                side=OrderSide.BUY,
-                time_in_force=TimeInForce.GTC,
-                order_class="bracket",  # <--- CRITICAL: Links the orders
-                stop_loss={"stop_price": stop_price},
-                take_profit={"limit_price": round(state.current_price * 1.15, 2)} # 15% upside target
-            )
-
-            print(f"   🛡️ BRACKET ORDER SENT: Buy {qty} {state.ticker} @ ~${state.current_price}")
-            print(f"      └── 🛑 Hard Stop Loss set at: ${stop_price}")
-
-            self.alpaca.submit_order(req)
-            return qty
-
+            if qty > 0:
+                print(f"   🚀 ORDER SENT: Buy {qty} {state.ticker}")
+                self.alpaca.submit_order(MarketOrderRequest(symbol=state.ticker, qty=qty, side=OrderSide.BUY, time_in_force=TimeInForce.GTC))
+                return qty
+            return 0.0
         except Exception as e:
             print(f"   ❌ Buy Error: {e}")
             return 0.0
 
-    def execute_sell(self, ticker: str, qty: float, reason: str):
-        try:
-            self.smart_cancel(ticker, OrderSide.SELL)
-            print(f"   📉 SELL ORDER: {qty} {ticker}")
-            self.alpaca.submit_order(MarketOrderRequest(symbol=ticker, qty=qty, side=OrderSide.SELL, time_in_force=TimeInForce.GTC))
-        except Exception as e:
-            print(f"   ❌ Sell Error: {e}")
+    def execute_sell(self, ticker: str, qty: float, reason: str, price: float = 0.0):
+            try:
+                self.smart_cancel(ticker, OrderSide.SELL)
+
+                # IMPROVED LOG MESSAGE
+                print(f"   📉 SELL ORDER SENT: {qty} {ticker} @ ~${price:.2f} | Reason: {reason}")
+
+                self.alpaca.submit_order(
+                    MarketOrderRequest(
+                        symbol=ticker,
+                        qty=qty,
+                        side=OrderSide.SELL,
+                        time_in_force=TimeInForce.GTC
+                    )
+                )
+            except Exception as e:
+                print(f"   ❌ Sell Error: {e}")
 
     def smart_cancel(self, ticker: str, side_to_cancel: OrderSide):
         try:
@@ -735,7 +734,7 @@ class PortfolioManager:
         print("="*155)
         df = pd.DataFrame(self.scan_results)
         df.insert(0, '#', range(1, len(df) + 1))
-        
+
         cols = ["#", "Ticker", "Status", "Action", "Qty", "Price", "TotalPos", "PL", "Score", "Growth", "PE", "Margin", "Reason"]
         final_cols = [c for c in cols if c in df.columns]
 
@@ -791,7 +790,7 @@ class PortfolioManager:
             # 2. Upload File (The Modern Way)
             timestamp = datetime.now().strftime('%Y-%m-%d')
             filename = f"Darwinian_Report_{timestamp}.csv"
-            
+
             self.slack.files_upload_v2(
                 channel=self.config.SLACK_CHANNEL,
                 title=filename,
