@@ -1,24 +1,22 @@
-name: Deploy to Cloud Run Jobs
+name: Deploy Recap Job
 
 on:
   push:
     branches: [ "main" ]
+    paths:
+      - 'weekend_recap.py'
+      - 'main.py'
+      - 'Dockerfile'
+      - 'requirements.txt'
   workflow_dispatch:
 
 env:
   REPO_NAME: darwinian-repo
-  IMAGE_NAME: darwinian-swarm
-  # Define your schedule here for easy editing
-  # 0: Minute 0
-  # 10,14: At 10 AM and 2 PM (14:00)
-  # *: Every day of month
-  # *: Every month
-    # 1-5: Monday (1) through Friday (5)
-  CRON_SCHEDULE: "30 9,10,11,14,15 * * 1-5"
+  IMAGE_NAME: darwinian-recap
   REGION: us-east4
 
 jobs:
-  build-and-deploy:
+  deploy-recap:
     runs-on: ubuntu-latest
     permissions:
       contents: 'read'
@@ -45,6 +43,9 @@ jobs:
           gcloud auth configure-docker ${{ secrets.GCP_REGION }}-docker.pkg.dev --quiet
 
       # 4. Build and Push Docker Image
+      # We build a specific image for recap to keep things clean, or reuse the base?
+      # Reuse base is efficient, but separate images allows independent rollback.
+      # Let's build a dedicated tag for clarity: darwinian-recap
       - name: Build and Push
         run: |
           TAG="${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}"
@@ -52,11 +53,13 @@ jobs:
           docker push ${TAG}:${{ github.sha }}
           docker push ${TAG}:latest
 
-      # 5. Deploy Cloud Run Job (TRADER)
-      - name: Deploy Trader Job
+      # 5. Deploy Cloud Run Job (RECAP ONLY)
+      - name: Deploy Recap Job
         run: |
-          gcloud run jobs deploy darwinian-trader-v4 \
+          gcloud run jobs deploy darwinian-recap \
             --image ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest \
+            --command python \
+            --args weekend_recap.py \
             --region ${{ secrets.GCP_REGION }} \
             --service-account ${{ secrets.GCP_SA_EMAIL }} \
             --set-env-vars GCS_BUCKET_NAME="darwinian-memory-${{ secrets.GCP_PROJECT_ID }}" \
@@ -69,19 +72,19 @@ jobs:
             --task-timeout 300s \
             --quiet
 
-      # 6. UPDATE SCHEDULER (Hourly Trade)
-      - name: Update Hourly Scheduler
+      # 6. UPDATE SCHEDULER (Weekly Recap)
+      - name: Update Weekly Recap Scheduler
         run: |
-          gcloud scheduler jobs update http darwinian-hourly \
-            --schedule "${{ env.CRON_SCHEDULE }}" \
+          gcloud scheduler jobs update http weekly-recap-audit \
+            --schedule "30 17 * * 5" \
             --time-zone "America/New_York" \
             --location ${{ secrets.GCP_REGION }} \
-            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
+            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-recap:run" \
             --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
-            --quiet || gcloud scheduler jobs create http darwinian-hourly \
-            --schedule "${{ env.CRON_SCHEDULE }}" \
+            --quiet || gcloud scheduler jobs create http weekly-recap-audit \
+            --schedule "30 17 * * 5" \
             --time-zone "America/New_York" \
             --location ${{ secrets.GCP_REGION }} \
-            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-trader-v4:run" \
+            --uri "https://${{ secrets.GCP_REGION }}-run.googleapis.com/apis/run.googleapis.com/v1/namespaces/${{ secrets.GCP_PROJECT_ID }}/jobs/darwinian-recap:run" \
             --oauth-service-account-email ${{ secrets.GCP_SA_EMAIL }} \
             --quiet
