@@ -41,6 +41,7 @@ from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from firestore_bridge import DarwinianBridge
 
 # --- 1. LOGGING CONFIGURATION ---
 logging.basicConfig(
@@ -538,6 +539,7 @@ class PortfolioManager:
         self.tracker = HybridTracker(use_cloud=True)
         self.slack = WebClient(token=config.SLACK_TOKEN)
         self.discovery = DiscoveryAgent(config)
+        self.bridge = DarwinianBridge()
         self.scan_results: List[Dict] = []
         self.start_time = datetime.now()
 
@@ -707,7 +709,20 @@ class PortfolioManager:
     # --- RUN LOOP ---
     def run(self):
         try:
+            # 1. Fetch latest data from Alpaca
+            account = self.alpaca.get_account()
             alpaca_pos = self.alpaca.get_all_positions()
+
+            # --- BRIDGE INJECTION START ---
+            print(f"Syncing data... Equity: ${account.equity}")
+
+            # Send Cash & Equity to Dashboard
+            self.bridge.update_portfolio(account)
+
+            # Send Holdings (AAPL, TSLA, etc.) to Dashboard
+            self.bridge.update_positions(alpaca_pos)
+            # --- BRIDGE INJECTION END ---
+
             positions = {}
             for p in alpaca_pos:
                 positions[p.symbol] = {"qty": float(p.qty), "entry": float(p.avg_entry_price)}
