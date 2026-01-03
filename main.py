@@ -35,7 +35,7 @@ from slack_sdk import WebClient
 from slack_sdk.errors import SlackApiError
 from alpaca.trading.client import TradingClient
 from alpaca.trading.requests import GetOrdersRequest
-from alpaca.trading.enums import QueryOrderStatus
+from alpaca.trading.enums import QueryOrderStatus, OrderStatus
 from alpaca.trading.requests import MarketOrderRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.data.historical import StockHistoricalDataClient
@@ -677,22 +677,46 @@ class PortfolioManager:
             return 0.0
 
     def execute_sell(self, ticker: str, qty: float, reason: str, price: float = 0.0):
+        """
+        Safely closes a position by clearing open orders first to prevent
+        accidental shorting (negative shares).
+        """
+        print(f"⚠️ {reason} Triggered for {ticker}. Initiating Safe Close...")
+
+        try:
+            # STEP 1: Cancel all OPEN orders for this symbol first
+            # This prevents 'Ghost Orders' from filling after we market sell
+            self.alpaca.cancel_orders(
+                GetOrdersRequest(status=QueryOrderStatus.OPEN, symbols=[ticker])
+            )
+            print(f" -> Open orders for {ticker} cancelled.")
+
+            # STEP 2: Refresh the ACTUAL position from the Exchange
+            # Do not rely on local variables passed into this function
             try:
-                self.smart_cancel(ticker, OrderSide.SELL)
-
-                # IMPROVED LOG MESSAGE
-                print(f"   📉 SELL ORDER SENT: {qty} {ticker} @ ~${price:.2f} | Reason: {reason}")
-
-                self.alpaca.submit_order(
-                    MarketOrderRequest(
-                        symbol=ticker,
-                        qty=qty,
-                        side=OrderSide.SELL,
-                        time_in_force=TimeInForce.GTC
-                    )
-                )
+                position = self.alpaca.get_open_position(ticker)
+                qty_available = float(position.qty)
             except Exception as e:
-                print(f"   ❌ Sell Error: {e}")
+                print(f" -> No open position found for {ticker} on exchange. Aborting sell.")
+                return
+
+            if qty_available <= 0:
+                print(f" -> Quantity is {qty_available}. Nothing to sell.")
+                return
+
+            # STEP 3: Execute the Sell for the EXACT available quantity
+            print(f" -> Executing Market Sell for {qty_available} shares.")
+            market_order_data = MarketOrderRequest(
+                symbol=ticker,
+                qty=qty_available,
+                side=OrderSide.SELL,
+                time_in_force=TimeInForce.DAY
+            )
+            self.alpaca.submit_order(order_data=market_order_data)
+            print(f"✅ Position {ticker} closed successfully.")
+
+        except Exception as e:
+            print(f"❌ CRITICAL ERROR closing {ticker}: {e}")
 
     def smart_cancel(self, ticker: str, side_to_cancel: OrderSide):
         try:
