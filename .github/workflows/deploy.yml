@@ -74,8 +74,7 @@ jobs:
         run: |
           gcloud run jobs deploy darwinian-recap \
             --image ${{ secrets.GCP_REGION }}-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/${{ env.REPO_NAME }}/${{ env.IMAGE_NAME }}:latest \
-            --command python \
-            --args weekend_recap.py \
+            --args python,weekend_recap.py \
             --region ${{ secrets.GCP_REGION }} \
             --service-account ${{ secrets.GCP_SA_EMAIL }} \
             --set-env-vars GCS_BUCKET_NAME="darwinian-memory-${{ secrets.GCP_PROJECT_ID }}" \
