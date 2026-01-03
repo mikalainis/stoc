@@ -1,5 +1,6 @@
 import pandas as pd
 import sys
+import os
 import numpy as np
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Any, List
@@ -35,8 +36,15 @@ class WeekendAuditor:
         self.slack = WebClient(token=self.cfg.SLACK_TOKEN)
         self.data: Dict[str, Any] = {}
 
-        # Initialize DB connection immediately
-        self.db = firestore.Client(database="stocs")
+        # Initialize DB connection immediately, with fallback for CI/Test
+        try:
+            self.db = firestore.Client(database="stocs")
+        except Exception as e:
+            if os.getenv("IS_PAPER") == "True":
+                print(f"    ⚠️ [TEST MODE] Firestore Init Failed (Expected): {e}")
+                self.db = None
+            else:
+                raise e
 
     def _get_market_context(self) -> Dict[str, Any]:
         """
@@ -70,6 +78,11 @@ class WeekendAuditor:
         Loads trade history.
         OPTIMIZATION V5.2: Merges 'Recent' and 'Active' queries to save RAM.
         """
+        if self.db is None:
+            print("    ⚠️ [TEST MODE] Skipping Firestore load. Using empty data.")
+            self.data = {}
+            return
+
         try:
             print("    ☁️ Connecting to Firestore (DB: stocs)...")
             collection = self.db.collection("darwinian_analysis")
